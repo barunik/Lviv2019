@@ -1,0 +1,152 @@
+---
+title: 'Applied Econometrics (Part 3)'
+subtitle: 'Lviv Data Science Summer School' 
+author: "Jozef Barunik & Luboš Hanus"
+date: "July 2019"
+output:
+  html_document:
+    fig.retina: 1
+    fig_height: 3.5
+    fig_width: 5
+    keep_md: yes
+    toc: true
+    toc_float: true
+    number_sections: true
+  pdf_document:
+    fig_height: 2.1
+    fig_width: 4.2
+    keep_tex: yes
+    latex_engine: xelatex
+---
+<!-- #### Outline -->
+<!-- * Linear AR, MA processes -->
+<!-- * VAR analysis -->
+<!-- * Connection to Machine Learning techniques -->
+<!-- * Macro + Finance application -->
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#fig.width = 9.5, fig.height = 3.7
+```
+
+Let's install required packages first, please change the path
+
+```{r results='hide', message=FALSE, warning=FALSE}
+rm(list = ls())
+library(data.table)
+#library(devtools)
+#install_github("wbnicholson/BigVAR/BigVAR")
+#install_github("tomaskrehlik/frequencyConnectedness", tag = "0.1.6") 
+library(frequencyConnectedness)
+library(igraph,warn.conflicts=F)
+library(MASS,warn.conflicts=F)
+library(BigVAR)
+```
+
+
+# Application: Connectedness
+We can further think how to use information in VAR. For example, if we want to measure how the system is connected, FEVDs can be used. 
+
+FEVD gives information on how shocks transmit, how shock in variable $i$ spills over to variable $j$.
+
+This is very useful, as it can be used as a system characterisation
+
+## how to measure connectedness of a system?
+
+We will work with 11 most important banks data, returns and volatility (measure of risk, uncertainty)
+
+```{r fig.width = 9.5, fig.height = 9.5}
+
+load(file="Example_banks.RData")
+## Example of data
+plot.ts(ret[,2])
+lines(sqrt(rv[,2]),col="red")
+
+```
+
+Consider an $N$-dimensional vector $\mathbf{RV_t} = (RV_{1t},\ldots,RV_{nt})'$ holding $N$ assets that we model by VAR($p$) system as
+
+$$\mathbf{RV_t} = \sum_{i=1}^p \mathbf{\Phi}_i \mathbf{RV}_{t-i}+ \boldsymbol{\epsilon}_t$$
+
+with $\boldsymbol{\epsilon}_t\sim N(0,\mathbf{\Sigma}_{\epsilon})$. Moving average representation: 
+
+$$\mathbf{RV}_t = \sum_{i=0}^{\infty}\mathbf{\Psi}_{i}\boldsymbol{\epsilon}_{t-i}.$$
+
+These coefficients are extremely useful, since they show how shocks from variables transmit in the system, hence how the system is connected. The onlyt problem is identification of shocks.
+
+We can use Generalized FEVDs
+$$\omega_{ij}^H=\frac{\sigma_{jj}^{-1}\sum_{h=0}^{H-1}\left( \mathbf{e}'_i \mathbf{\Psi}_h \mathbf{\Sigma}_{\epsilon}\mathbf{e}_j \right)^2}{\sum_{h=0}^{H-1}\left( \mathbf{e}'_i \mathbf{\Psi}_h \mathbf{\Sigma}_{\epsilon}\mathbf{\Psi}'_h\mathbf{e}_i \right)},$$
+
+where $\mathbf{e}$ is a selection vector with one for $i$th element, zero otherwise. The sum of elements in rows is not equal to one, so we normalize it
+
+$$ \widetilde{\omega}_{ij}^H = \frac{\omega_{ij}^H}{\sum_{j=1}^N \omega_{ij}^H}.$$
+
+and finally obtain measure of connectedness $\mathcal{C} \in (0,100)$ 
+$$\mathcal{C}^H=100\times \frac{1}{N} \sum_{\substack{i,j=1\\ i\ne j}}^N\widetilde{\omega}_{ij}^H.$$
+
+Let's have a look at the connectedness table (elements of teh table are $\widetilde{\omega}_{ij}^{10}$)
+
+```{r}
+RV <- log(sqrt(rv))
+con<-spilloverDY12(VAR(RV, p = 4, type = "const"), n.ahead = 10, no.corr=F)
+con
+```
+Note FROM, and TO which are simple sums, and tell us *directional connectedness*
+
+Total connectedness is
+```{r}
+overall(con)
+```
+
+## Dynamic connectedness
+
+We can easily compute rolling window dynamics. 
+
+NOTE: this takes time!
+```{r fig.width = 9.5, fig.height = 9.5, cache=TRUE}
+spills<-spilloverRollingDY12(data = RV, n.ahead = 10, no.corr = F, "VAR", params_est = list(p = 2, type = "const"), window = 250)
+plot.ts(as.numeric(overall(spills)[[1]]), lwd=0.5,ylim=c(50,100),xlab="",ylab="")
+
+```
+
+## Network representation
+
+We can also note that VAR can be represented as a network
+
+```{r fig.width = 9.5, fig.height = 9.5, cache=TRUE}
+tab<-spilloverDY12(VAR(RV[1600:2000], p = 4, type = "const"), n.ahead = 10, no.corr=F)
+
+adj=t(100*tab$tables[[1]])
+diag(adj)=0  # 0 in an adjacency matrix means no edge is to be created
+adj[adj<=9]=0
+
+netw=graph_from_adjacency_matrix(adj,mode="directed",weighted=T)
+plot(netw,
+     layout=layout_with_fr,
+     vertex.size=to(tab)[[1]]*5
+)
+```
+
+
+## Machine learning connectedness
+In case we like to compute connectedness of large system, we can use lasso again.
+
+```{r fig.width = 9.5, fig.height = 9.5, message=FALSE, warning=FALSE, cache=TRUE}
+# Set very small lambda (gran parameter) to mimic no penalty
+Model1 = constructModel(as.matrix(RV[1600:2000]), p = 4, struct = "Basic", gran=c(2), verbose = F, VARX = list(), ownlambdas = T)
+Model1Results = cv.BigVAR(Model1)
+
+# spillover table from BigVaR
+tabBig<-spilloverDY12(Model1Results, n.ahead = 10, no.corr = F)
+
+adj=t(100*tabBig$tables[[1]])
+diag(adj)=0  # 0 in an adjacency matrix means no edge is to be created
+adj[adj<=9]=0
+
+netw=graph_from_adjacency_matrix(adj,mode="directed",weighted=T)
+plot(netw,
+     layout=layout_with_fr,
+     vertex.size=to(tabBig)[[1]]*5
+)
+```
+

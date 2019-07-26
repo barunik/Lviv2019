@@ -1,0 +1,320 @@
+---
+title: 'Applied Econometrics (Part 2)'
+subtitle: 'Lviv Data Science Summer School' 
+author: "Jozef Barunik"
+date: "July 2019"
+output:
+  html_document:
+    fig.retina: 1
+    fig_height: 3.5
+    fig_width: 5
+    keep_md: yes
+    toc: true
+    toc_float: true
+    number_sections: true
+  pdf_document:
+    fig_height: 2.1
+    fig_width: 4.2
+    keep_tex: yes
+    latex_engine: xelatex
+---
+<!-- #### Outline -->
+<!-- * Linear AR, MA processes -->
+<!-- * VAR analysis -->
+<!-- * Connection to Machine Learning techniques -->
+<!-- * Macro + Finance application -->
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#fig.width = 9.5, fig.height = 3.7
+```
+
+Let's install required packages first, please change the path
+
+```{r results='hide', message=FALSE, warning=FALSE}
+
+rm(list = ls())
+library(FinTS)
+library(ggplot2)
+library(igraph,warn.conflicts=F)
+library(MASS,warn.conflicts=F)
+library(lmtest)
+library(tseries)
+library(forecast)
+library(vars)
+library(mAr)
+
+setwd("~/Documents/PhD/Konference/2018/Lviv_summer_school/Lecture notes/")
+```
+
+
+# Vector Autoregression (VAR$(p)$)
+Let's consider $d$-variate, strictly stationary process, with components $X_{t,j}$, $j=1,\ldots,d$; i.\,e. $X_t = (x_{1,t}, ..., x_{d,t})'$, 
+$$X_t = A + B_1X_{t-1} + B_2 X_{t-2} + ... + B_pX_{t-p} + \epsilon_t$$,
+where $E(\epsilon_t)=0$, $E(e_t e_t')=\Omega$ being covariance matrix.
+
+In bivariate VAR(1) case, we have 
+
+$$
+\left(\begin{array}{c} x_{1,t} \\ x_{2,t} \end{array}\right) = 
+\left({\begin{array}{c} \alpha_1 \\ \alpha_2 \end{array}}\right) + 
+\left(\begin{array}{cc} \beta_{1,1} & \beta_{1,2}\\ \beta_{2,1} & \beta_{2,2} \end{array}\right)
+\left(\begin{array}{c} x_{1,t-1} \\ x_{2,t-1} \end{array}\right) +
+\left(\begin{array}{c} \epsilon_{1,t} \\ \epsilon_{2,t} \end{array}\right)
+$$
+
+or equivalently as system of equations
+
+$$x_{1,t} = \alpha_1 + \beta_{1,1} x_{1,t-1} + \beta_{1,2} x_{2,t-1} + \epsilon_{1,t} $$
+$$x_{2,t} = \alpha_2 + \beta_{2,1} x_{1,t-1} + \beta_{2,2} x_{2,t-1} + \epsilon_{2,t}$$
+
+Let's simulate $x_{1,t}$, and $x_{2,t}$ from this model
+
+$$
+\left(\begin{array}{c} x_{1,t} \\ x_{2,t} \end{array}\right) = 
+\left({\begin{array}{c} 0.1 \\ 0.2 \end{array}}\right) + 
+\left(\begin{array}{cc} 0.4 & 0.6\\ 0.1 & 0.3 \end{array}\right)
+\left(\begin{array}{c} x_{1,t-1} \\ x_{2,t-1} \end{array}\right) +
+\left(\begin{array}{c} \epsilon_{1,t} \\ \epsilon_{2,t} \end{array}\right)
+$$
+
+
+```{r fig.width = 9.5, fig.height = 5.7}
+A=c(0.1,0.2)
+cov=rbind(c(1,0),c(0,1))
+B=rbind(c(0.4,0.6),c(0.1,0.3))
+res <- mAr.sim(A,B,cov,N=1000)
+
+plot.ts(res)
+```
+
+Usual diagnostics first, similar to univariate modelling, first observe ACF/PACF
+```{r fig.width = 9.5, fig.height = 5.7}
+acf(res, lag.max = 12)
+pacf(res, lag.max = 12)
+```
+Plots indicate that there is ACF dependence, but also some dependence between  $x_{1,t}$, and $x_{2,t}$ (of course, we have created it). 
+
+This type of (causal) dependence is key for VAR modelling.
+
+Excercise: try to change parameters and causal versus contemporaneous dependence
+
+## Wold Decomposition and MA representation
+Every covariance-stationary time series $X_t$ can be written as MA$(\infty)$
+$$
+X_t = \sum_{j=0}^\infty \theta_j \epsilon_{t-j}
+$$
+with $\theta_0=1$, and $\sum_{j=0}^\infty |\theta_j| < \infty$, $\epsilon_t$ being Gaussian white noise.
+
+This is very important since it allows to look at influence of shocks
+
+## IRFs
+VAR models are often difficult to interpret. Impulse response functions (due to  MA$(\infty)$ representation) allow to study the interactions
+
+```{r fig.width = 9.5, fig.height = 5.7, cache = TRUE}
+
+# first estimate the parameters
+var.2c <- VAR(res, p = 1, type = "const")
+
+irf.gdp1 <- irf(var.2c , impulse = "X1", response = "X2", n.ahead = 20)
+plot(irf.gdp1, ylab = "X2", main = "Shock from X1")
+
+irf.gdp2 <- irf(var.2c , impulse = "X2", response = "X1", n.ahead = 20)
+plot(irf.gdp2, ylab = "X1", main = "Shock from X2")
+```
+
+
+##FEVDs
+Forecast error variance decomposition (FEVD) show amount of information each variable contributes to the other variables in the autoregression. It determines how much of the forecast error variance of each of the variables can be explained by exogenous shocks to the other variables.
+
+```{r fig.width = 9.5, fig.height = 5.7}
+bv.vardec <- fevd(var.2c, n.ahead = 10)
+plot(bv.vardec)
+```
+
+## Granger causality
+Is one variable useful in forecasting of another?
+```{r}
+causality(var.2c, cause = "X1")
+causality(var.2c, cause = "X2")
+```
+
+
+## Estimation: Choosing lag length
+It is even less obvious, and more tricky in comparison to univariate models.
+
+We can use information criteria (IC) to compare models. Best model is one with minimized information criteria, Akaike, Hannah-Quinn, Schwarz, and Final Prediction Error defined as
+
+AIC = $\ln |\Omega| + \frac{2}{T}n d^2 \quad$
+
+HQ = $\ln |\Omega| + \frac{2 \ln(\ln(T))}{T}n d^2 \quad$
+
+SC = $\ln |\Omega| + \frac{\ln(T)}{T}n d^2 \quad$
+
+FPE = $(\frac{T + m}{T - m} )^d |\Sigma| \quad$
+
+where $T$ is number of observations, $|\Sigma|$ is determinant of covariance matrix, $m$ number of parameters in the model, and $n$ lag order, and $d$ dimension of the process.
+
+Note that IC *penalize* number of parameters
+
+```{r}
+VARselect(res, lag.max = 4, type = "const")
+```
+In case of simulated data, IC choose lag correctly, let's hope it will be the case on real data too.
+
+
+## Stability of the model
+
+VAR needs to be covariance stationary. Usually, we check stability by evaluating characteristic polynomial
+
+$$|I - B_1 z - ... - A_pz^p|\ne0$$
+for $|z|\le 1$
+
+```{r}
+summary(var.2c)
+```
+
+
+
+
+
+
+# Application: Macro forecasting
+Now that we understand the concept, we can apply it to interesting realworld problems. One of the areas where VARs are widely used is macroeconomics. Let's use the data for Canada available in the package, and build a model for economy of Canada. The original time series are published by the OECD. The sample range is from the 1stQ 1980 until 4thQ 2000.
+
+## Data
+
+*e* is used for employment; 
+
+*prod* is used as a measure of labour productivity; 
+
+*rw* assigns the real wage.
+
+*U* is the unemployment rate and 
+
+
+```{r fig.width = 9.5, fig.height = 5.7}
+data(Canada)
+#?Canada
+
+plot(Canada)
+```
+
+## Estimation and checks
+```{r}
+VARselect(Canada, lag.max = 5, type = "const")
+```
+Information criteria suggest 2 to 3 lags
+
+
+```{r}
+es1 <- VAR(Canada, p = 2, type = "const")
+es2 <- VAR(Canada, p = 3, type = "const")
+#summary(es1)
+#summary(es2)
+```
+$p=2$ seems more parsimonous, as third lag does not add much 
+
+BUT we forgot about stationarity! *e* as well as *rw* are not stationary, butcontain strong trend! So we should put trend as well as constant
+
+```{r}
+es3 <- VAR(Canada, p = 2, type = "both")
+summary(es3)
+```
+
+
+Look at fits, ACFS, residuals...
+
+```{r fig.width = 9.5, fig.height = 5.7}
+plot(es3)
+
+es3.serial <- serial.test(es3, lags.pt = 12, type = "PT.asymptotic")
+es3.serial
+plot(es3.serial, names = "e")
+es3.arch <- arch.test(es3, lags.multi = 12, multivariate.only = TRUE)
+es3.arch
+es3.norm <- normality.test(es3, multivariate.only = TRUE)
+es3.norm
+```
+
+## Results interpretation
+Lots of coefficients... but not that interesting
+
+We look at 
+
+* Granger Causality
+* Impulse responses (IRF)
+* Variance Decompositions (FEVD)
+
+### Granger Causality
+Are variables causal, and useful for forecasting?
+```{r}
+causality(es3, cause = "e")
+causality(es3, cause = "prod")
+causality(es3, cause = "rw")
+causality(es3, cause = "U")
+```
+
+
+### IRFs
+How shocks propagate...
+```{r fig.width = 9.5, fig.height = 5.7,cache = TRUE}
+irf1 <- irf(es3, impulse = "e",  n.ahead = 40,response = c("prod", "rw", "U"), boot =TRUE)
+plot(irf1)
+```
+Positive shock to employment has negavive impact on productivity, increases real wages in horizon of 12 quarters, and decreases unemployment in short run.
+
+### FEVDs
+How much of future variability of data is explained by shocks to other variables?
+```{r fig.width = 9.5, fig.height = 5.7}
+plot(fevd(es3, n.ahead = 5))
+```
+
+## Forecasting
+```{r fig.width = 9.5, fig.height = 9.5}
+predictions <- predict(es3, n.ahead = 8, ci = 0.95)
+plot(predictions)
+```
+
+We can produce nice fancharts too
+```{r fig.width = 9.5, fig.height = 9.5}
+fanchart(predictions,colors=heat.colors(10, alpha = 1))
+```
+
+## A route toward machine learning
+
+These systems are problematic with large variables: lots of parameters to be estimated.
+
+We can use lasso/shrinkage/penalization to "let the machine choose" important parameters.
+
+While this works, we loose some interpretation.
+
+What it allows is large dimension (think: how many parameters we need to estimate on VAR(2) on 30 variable system?)
+
+
+### Classical versus Lasso estimates
+* VAR(2) versus lasso VAR forecast
+
+```{r results='hide', message=FALSE, warning=FALSE}
+library(fastVAR)
+```
+
+```{r fig.width = 9.5, fig.height = 9.5}
+e1<-SparseVAR(Canada, p = 3)
+
+coef(e1)
+b<- predict(e1,8)
+
+par(mfrow=c(2,2))
+plot.ts(c(Canada[,1],predictions$fcst$e[,1]),ylab="")
+lines(c(Canada[,1],b[,1]),lty=2)
+
+plot.ts(c(Canada[,2],predictions$fcst$prod[,1]),ylab="")
+lines(c(Canada[,2],b[,2]),lty=2)
+
+plot.ts(c(Canada[,3],predictions$fcst$rw[,1]),ylab="")
+lines(c(Canada[,3],b[,3]),lty=2)
+
+plot.ts(c(Canada[,4],predictions$fcst$U[,1]),ylab="")
+lines(c(Canada[,4],b[,4]),lty=2)
+```
